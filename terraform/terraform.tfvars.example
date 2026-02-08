@@ -1,0 +1,18 @@
+# GCP Configuration
+project_id = "your-gcp-project-id"
+region     = "asia-northeast1"
+
+# LINE Configuration
+line_channel_secret       = "your-line-channel-secret"
+line_channel_access_token = "your-line-channel-access-token"
+allowed_line_user_id      = "Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# API Keys
+gemini_api_key      = "your-gemini-api-key"
+pavlok_access_token = "your-pavlok-access-token"
+
+# Safety Settings (optional)
+max_daily_shocks  = 10
+max_hourly_shocks = 3
+quiet_hours_start = 23
+quiet_hours_end   = 6

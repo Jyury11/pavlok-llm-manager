@@ -1,0 +1,85 @@
+name: Deploy to GCP
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  TF_VERSION: "1.7.0"
+  GO_VERSION: "1.22"
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Get tag version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_TAG="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/pavlok-llm-manager/pavlok-llm-manager"
+          docker build -t ${IMAGE_TAG}:${{ steps.get_version.outputs.VERSION }} -t ${IMAGE_TAG}:latest .
+          docker push ${IMAGE_TAG}:${{ steps.get_version.outputs.VERSION }}
+          docker push ${IMAGE_TAG}:latest
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -var-file="terraform.tfvars" -var="image_tag=${{ steps.get_version.outputs.VERSION }}" -out=tfplan
+        env:
+          TF_VAR_line_channel_secret: ${{ secrets.LINE_CHANNEL_SECRET }}
+          TF_VAR_line_channel_access_token: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          TF_VAR_allowed_line_user_id: ${{ secrets.ALLOWED_LINE_USER_ID }}
+          TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          TF_VAR_pavlok_access_token: ${{ secrets.PAVLOK_ACCESS_TOKEN }}
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Cloud Run URL
+        working-directory: terraform
+        run: |
+          echo "## Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.get_version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Webhook URL:** $(terraform output -raw webhook_url)" >> $GITHUB_STEP_SUMMARY
