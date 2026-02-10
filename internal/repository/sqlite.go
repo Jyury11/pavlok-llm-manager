@@ -54,9 +54,17 @@ func (r *SQLiteRepository) initTables() error {
 			completed_on_time INTEGER NOT NULL DEFAULT 0,
 			total_shocks INTEGER NOT NULL DEFAULT 0
 		)`,
+		`CREATE TABLE IF NOT EXISTS conversation_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			date DATE NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_schedules_created_at ON schedules(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_schedules_status ON schedules(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_punishment_logs_executed_at ON punishment_logs(executed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_conversation_history_date ON conversation_history(date)`,
 	}
 
 	for _, query := range queries {
@@ -288,4 +296,60 @@ func (r *SQLiteRepository) GetTodayStat() (*model.DailyStat, error) {
 		return nil, err
 	}
 	return stat, nil
+}
+
+// AddConversationMessage adds a message to conversation history.
+func (r *SQLiteRepository) AddConversationMessage(msg *model.ConversationMessage) error {
+	result, err := r.db.Exec(
+		`INSERT INTO conversation_history (role, content, date, created_at) VALUES (?, ?, ?, ?)`,
+		msg.Role, msg.Content, msg.Date, msg.CreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	msg.ID = id
+	return nil
+}
+
+// GetTodayConversationHistory returns today's conversation history.
+func (r *SQLiteRepository) GetTodayConversationHistory() ([]*model.ConversationMessage, error) {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	rows, err := r.db.Query(
+		`SELECT id, role, content, date, created_at
+		 FROM conversation_history
+		 WHERE date = ?
+		 ORDER BY created_at ASC`,
+		today,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []*model.ConversationMessage
+	for rows.Next() {
+		m := &model.ConversationMessage{}
+		err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Date, &m.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, m)
+	}
+	return messages, rows.Err()
+}
+
+// ClearOldConversationHistory deletes conversation history older than today.
+func (r *SQLiteRepository) ClearOldConversationHistory() error {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	_, err := r.db.Exec(`DELETE FROM conversation_history WHERE date < ?`, today)
+	return err
 }

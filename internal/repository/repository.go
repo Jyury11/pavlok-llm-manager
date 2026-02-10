@@ -26,6 +26,11 @@ type Repository interface {
 	UpsertDailyStat(stat *model.DailyStat) error
 	GetTodayStat() (*model.DailyStat, error)
 
+	// ConversationHistory operations
+	AddConversationMessage(msg *model.ConversationMessage) error
+	GetTodayConversationHistory() ([]*model.ConversationMessage, error)
+	ClearOldConversationHistory() error
+
 	// Lifecycle
 	Close() error
 }

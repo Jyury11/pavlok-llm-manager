@@ -28,16 +28,27 @@ func NewCronService(cfg *config.Config, scheduler *SchedulerService, logger *slo
 
 // Start starts the cron service.
 func (c *CronService) Start() {
-	if !c.cfg.ReviewEnable {
-		c.logger.Info("daily review is disabled")
-		return
+	if c.cfg.MorningPromptEnable {
+		go c.runMorningPromptScheduler()
+		c.logger.Info("morning prompt scheduler started",
+			slog.Int("hour", c.cfg.MorningPromptHour),
+			slog.Int("minute", c.cfg.MorningPromptMinute),
+		)
+	} else {
+		c.logger.Info("morning prompt is disabled")
 	}
 
-	go c.runReviewScheduler()
-	c.logger.Info("cron service started",
-		slog.Int("review_hour", c.cfg.ReviewHour),
-		slog.Int("review_minute", c.cfg.ReviewMinute),
-	)
+	if c.cfg.ReviewEnable {
+		go c.runReviewScheduler()
+		c.logger.Info("daily review scheduler started",
+			slog.Int("hour", c.cfg.ReviewHour),
+			slog.Int("minute", c.cfg.ReviewMinute),
+		)
+	} else {
+		c.logger.Info("daily review is disabled")
+	}
+
+	c.logger.Info("cron service started")
 }
 
 // Stop stops the cron service.
@@ -46,10 +57,30 @@ func (c *CronService) Stop() {
 	c.logger.Info("cron service stopped")
 }
 
+func (c *CronService) runMorningPromptScheduler() {
+	for {
+		now := time.Now()
+		nextRun := c.calculateNextScheduledTime(now, c.cfg.MorningPromptHour, c.cfg.MorningPromptMinute)
+		waitDuration := nextRun.Sub(now)
+
+		c.logger.Info("next morning prompt scheduled",
+			slog.Time("next_run", nextRun),
+			slog.Duration("wait_duration", waitDuration),
+		)
+
+		select {
+		case <-time.After(waitDuration):
+			c.executeMorningPrompt()
+		case <-c.stopCh:
+			return
+		}
+	}
+}
+
 func (c *CronService) runReviewScheduler() {
 	for {
 		now := time.Now()
-		nextRun := c.calculateNextReviewTime(now)
+		nextRun := c.calculateNextScheduledTime(now, c.cfg.ReviewHour, c.cfg.ReviewMinute)
 		waitDuration := nextRun.Sub(now)
 
 		c.logger.Info("next daily review scheduled",
@@ -66,20 +97,31 @@ func (c *CronService) runReviewScheduler() {
 	}
 }
 
-func (c *CronService) calculateNextReviewTime(now time.Time) time.Time {
-	// Calculate today's review time
-	reviewTime := time.Date(
+func (c *CronService) calculateNextScheduledTime(now time.Time, hour, minute int) time.Time {
+	// Calculate today's scheduled time
+	scheduledTime := time.Date(
 		now.Year(), now.Month(), now.Day(),
-		c.cfg.ReviewHour, c.cfg.ReviewMinute, 0, 0,
+		hour, minute, 0, 0,
 		now.Location(),
 	)
 
-	// If today's review time has passed, schedule for tomorrow
-	if now.After(reviewTime) {
-		reviewTime = reviewTime.Add(24 * time.Hour)
+	// If today's scheduled time has passed, schedule for tomorrow
+	if now.After(scheduledTime) {
+		scheduledTime = scheduledTime.Add(24 * time.Hour)
 	}
 
-	return reviewTime
+	return scheduledTime
+}
+
+func (c *CronService) executeMorningPrompt() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c.logger.Info("executing morning prompt")
+
+	if err := c.scheduler.SendMorningPrompt(ctx); err != nil {
+		c.logger.Error("failed to send morning prompt", slog.String("error", err.Error()))
+	}
 }
 
 func (c *CronService) executeDailyReview() {

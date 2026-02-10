@@ -47,6 +47,11 @@ type Config struct {
 	ReviewHour   int  // 振り返り通知の時間（24時間形式）
 	ReviewMinute int  // 振り返り通知の分
 	ReviewEnable bool // 振り返り機能の有効/無効
+
+	// Morning prompt
+	MorningPromptHour   int  // 朝のスケジュール確認の時間
+	MorningPromptMinute int  // 朝のスケジュール確認の分
+	MorningPromptEnable bool // 朝のスケジュール確認の有効/無効
 }
 
 // Load loads configuration from environment variables.
@@ -69,6 +74,9 @@ func Load() (*Config, error) {
 		ReviewHour:             getEnvInt("REVIEW_HOUR", 21),
 		ReviewMinute:           getEnvInt("REVIEW_MINUTE", 0),
 		ReviewEnable:           getEnvBool("REVIEW_ENABLE", true),
+		MorningPromptHour:      getEnvInt("MORNING_PROMPT_HOUR", 8),
+		MorningPromptMinute:    getEnvInt("MORNING_PROMPT_MINUTE", 15),
+		MorningPromptEnable:    getEnvBool("MORNING_PROMPT_ENABLE", true),
 	}
 
 	if err := cfg.validate(); err != nil {

@@ -40,7 +40,7 @@ func (s *GeminiService) Close() error {
 	return s.client.Close()
 }
 
-func (s *GeminiService) ParseMessage(ctx context.Context, message string, pendingTasks []*model.Schedule) (*model.ParsedMessage, error) {
+func (s *GeminiService) ParseMessage(ctx context.Context, message string, pendingTasks []*model.Schedule, conversationHistory []*model.ConversationMessage) (*model.ParsedMessage, error) {
 	now := time.Now()
 
 	taskListStr := ""
@@ -50,6 +50,19 @@ func (s *GeminiService) ParseMessage(ctx context.Context, message string, pendin
 			tasks = append(tasks, fmt.Sprintf("- %s (期限: %s)", t.TaskName, t.Deadline.Format("15:04")))
 		}
 		taskListStr = "現在の未完了タスク:\n" + strings.Join(tasks, "\n")
+	}
+
+	historyStr := ""
+	if len(conversationHistory) > 0 {
+		var history []string
+		for _, h := range conversationHistory {
+			role := "ユーザー"
+			if h.Role == model.RoleAssistant {
+				role = "アシスタント"
+			}
+			history = append(history, fmt.Sprintf("[%s] %s: %s", h.CreatedAt.Format("15:04"), role, h.Content))
+		}
+		historyStr = "\n\n今日の会話履歴:\n" + strings.Join(history, "\n")
 	}
 
 	prompt := fmt.Sprintf(`あなたはスケジュール管理アシスタントです。
@@ -62,7 +75,7 @@ func (s *GeminiService) ParseMessage(ctx context.Context, message string, pendin
 5. other: その他
 
 現在時刻: %s
-%s
+%s%s
 
 ユーザーメッセージ: %s
 
@@ -89,6 +102,7 @@ func (s *GeminiService) ParseMessage(ctx context.Context, message string, pendin
 - JSONのみを出力し、他のテキストは含めないでください`,
 		now.Format("15:04"),
 		taskListStr,
+		historyStr,
 		message,
 	)
 
@@ -260,6 +274,42 @@ func (s *GeminiService) GenerateResponse(ctx context.Context, message string, sc
 - 応答テキストのみを出力してください`,
 		schedulesInfo,
 		message,
+	)
+
+	resp, err := s.model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate content: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty response from gemini")
+	}
+
+	return fmt.Sprintf("%v", resp.Candidates[0].Content.Parts[0]), nil
+}
+
+// GenerateMorningPrompt generates a morning message asking about today's schedule.
+func (s *GeminiService) GenerateMorningPrompt(ctx context.Context) (string, error) {
+	now := time.Now()
+	weekday := []string{"日", "月", "火", "水", "木", "金", "土"}[now.Weekday()]
+
+	prompt := fmt.Sprintf(`あなたはフレンドリーなスケジュール管理アシスタントです。
+朝のあいさつと今日の予定を聞くメッセージを生成してください。
+
+今日の日付: %s (%s曜日)
+
+以下の要素を含むメッセージを生成してください:
+1. 明るい朝のあいさつ
+2. 今日の予定やタスクを聞く質問
+3. 具体的な時間と一緒に教えてもらうよう促す（例：「9時までに起床」「14時に会議」など）
+
+注意:
+- メッセージは日本語で、親しみやすいトーンで
+- 絵文字を適度に使用
+- 全体で100-150文字程度に収める
+- 応答テキストのみを出力してください`,
+		now.Format("2006年1月2日"),
+		weekday,
 	)
 
 	resp, err := s.model.GenerateContent(ctx, genai.Text(prompt))

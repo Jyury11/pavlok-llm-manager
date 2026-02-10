@@ -92,3 +92,21 @@ variable "review_enable" {
   type        = bool
   default     = true
 }
+
+variable "morning_prompt_hour" {
+  description = "Morning prompt notification hour (24-hour format)"
+  type        = number
+  default     = 8
+}
+
+variable "morning_prompt_minute" {
+  description = "Morning prompt notification minute"
+  type        = number
+  default     = 15
+}
+
+variable "morning_prompt_enable" {
+  description = "Enable morning prompt feature"
+  type        = bool
+  default     = true
+}

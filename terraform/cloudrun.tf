@@ -95,6 +95,21 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.review_enable ? "true" : "false"
       }
 
+      env {
+        name  = "MORNING_PROMPT_HOUR"
+        value = tostring(var.morning_prompt_hour)
+      }
+
+      env {
+        name  = "MORNING_PROMPT_MINUTE"
+        value = tostring(var.morning_prompt_minute)
+      }
+
+      env {
+        name  = "MORNING_PROMPT_ENABLE"
+        value = var.morning_prompt_enable ? "true" : "false"
+      }
+
       # Secrets
       env {
         name = "LINE_CHANNEL_SECRET"

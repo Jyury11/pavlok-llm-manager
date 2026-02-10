@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	schedulesCollection      = "schedules"
-	punishmentLogsCollection = "punishment_logs"
-	dailyStatsCollection     = "daily_stats"
-	counterCollection        = "counters"
+	schedulesCollection           = "schedules"
+	punishmentLogsCollection      = "punishment_logs"
+	dailyStatsCollection          = "daily_stats"
+	counterCollection             = "counters"
+	conversationHistoryCollection = "conversation_history"
 )
 
 // FirestoreRepository implements Repository interface using Firestore.
@@ -370,4 +371,117 @@ func (r *FirestoreRepository) getNextID(collection string) (int64, error) {
 	})
 
 	return newID, err
+}
+
+// ConversationHistory document structure
+type conversationHistoryDoc struct {
+	ID        int64     `firestore:"id"`
+	Role      string    `firestore:"role"`
+	Content   string    `firestore:"content"`
+	Date      time.Time `firestore:"date"`
+	CreatedAt time.Time `firestore:"created_at"`
+}
+
+// AddConversationMessage adds a message to conversation history.
+func (r *FirestoreRepository) AddConversationMessage(msg *model.ConversationMessage) error {
+	id, err := r.getNextID(conversationHistoryCollection)
+	if err != nil {
+		return err
+	}
+	msg.ID = id
+
+	doc := conversationHistoryDoc{
+		ID:        msg.ID,
+		Role:      string(msg.Role),
+		Content:   msg.Content,
+		Date:      msg.Date,
+		CreatedAt: msg.CreatedAt,
+	}
+
+	docRef := r.client.Collection(conversationHistoryCollection).Doc(fmt.Sprintf("%d", msg.ID))
+	_, err = docRef.Set(r.ctx, doc)
+	return err
+}
+
+// GetTodayConversationHistory returns today's conversation history.
+func (r *FirestoreRepository) GetTodayConversationHistory() ([]*model.ConversationMessage, error) {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrow := today.Add(24 * time.Hour)
+
+	iter := r.client.Collection(conversationHistoryCollection).
+		Where("date", ">=", today).
+		Where("date", "<", tomorrow).
+		OrderBy("created_at", firestore.Asc).
+		Documents(r.ctx)
+	defer iter.Stop()
+
+	var messages []*model.ConversationMessage
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		var histDoc conversationHistoryDoc
+		if err := doc.DataTo(&histDoc); err != nil {
+			return nil, err
+		}
+
+		messages = append(messages, &model.ConversationMessage{
+			ID:        histDoc.ID,
+			Role:      model.ConversationRole(histDoc.Role),
+			Content:   histDoc.Content,
+			Date:      histDoc.Date,
+			CreatedAt: histDoc.CreatedAt,
+		})
+	}
+
+	return messages, nil
+}
+
+// ClearOldConversationHistory deletes conversation history older than today.
+func (r *FirestoreRepository) ClearOldConversationHistory() error {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	iter := r.client.Collection(conversationHistoryCollection).
+		Where("date", "<", today).
+		Documents(r.ctx)
+	defer iter.Stop()
+
+	batch := r.client.Batch()
+	count := 0
+
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		batch.Delete(doc.Ref)
+		count++
+
+		// Firestore batch limit is 500
+		if count >= 500 {
+			if _, err := batch.Commit(r.ctx); err != nil {
+				return err
+			}
+			batch = r.client.Batch()
+			count = 0
+		}
+	}
+
+	if count > 0 {
+		_, err := batch.Commit(r.ctx)
+		return err
+	}
+
+	return nil
 }

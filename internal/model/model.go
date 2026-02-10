@@ -93,3 +93,20 @@ type ReviewDecision struct {
 	PunishmentReason string
 	MessageToUser    string
 }
+
+// ConversationRole represents the role in a conversation.
+type ConversationRole string
+
+const (
+	RoleUser      ConversationRole = "user"
+	RoleAssistant ConversationRole = "assistant"
+)
+
+// ConversationMessage represents a single message in conversation history.
+type ConversationMessage struct {
+	ID        int64
+	Role      ConversationRole
+	Content   string
+	Date      time.Time // Date this message belongs to (for daily cleanup)
+	CreatedAt time.Time
+}

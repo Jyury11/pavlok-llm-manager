@@ -55,12 +55,22 @@ type ProcessResult struct {
 
 // ProcessMessage processes a user message and returns the result.
 func (s *SchedulerService) ProcessMessage(ctx context.Context, userMessage string) (*ProcessResult, error) {
+	// Save user message to conversation history
+	s.saveConversationMessage(model.RoleUser, userMessage)
+
 	pendingTasks, err := s.repo.GetPendingSchedules()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pending schedules: %w", err)
 	}
 
-	parsed, err := s.gemini.ParseMessage(ctx, userMessage, pendingTasks)
+	// Get today's conversation history
+	conversationHistory, err := s.repo.GetTodayConversationHistory()
+	if err != nil {
+		s.logger.Warn("failed to get conversation history", slog.String("error", err.Error()))
+		conversationHistory = nil
+	}
+
+	parsed, err := s.gemini.ParseMessage(ctx, userMessage, pendingTasks, conversationHistory)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse message: %w", err)
 	}
@@ -70,17 +80,40 @@ func (s *SchedulerService) ProcessMessage(ctx context.Context, userMessage strin
 		slog.Int("tasks_count", len(parsed.Tasks)),
 	)
 
+	var result *ProcessResult
+	var resultErr error
+
 	switch parsed.Intent {
 	case model.IntentScheduleRegister:
-		return s.handleScheduleRegister(parsed)
+		result, resultErr = s.handleScheduleRegister(parsed)
 	case model.IntentProgressReport:
-		return s.handleProgressReport(ctx, parsed, userMessage)
+		result, resultErr = s.handleProgressReport(ctx, parsed, userMessage)
 	case model.IntentStatusCheck:
-		return s.handleStatusCheck()
+		result, resultErr = s.handleStatusCheck()
 	case model.IntentReviewResponse:
-		return s.ProcessReviewResponse(ctx, userMessage)
+		result, resultErr = s.ProcessReviewResponse(ctx, userMessage)
 	default:
-		return s.handleOther(ctx, userMessage)
+		result, resultErr = s.handleOther(ctx, userMessage)
+	}
+
+	// Save assistant response to conversation history
+	if result != nil && result.ReplyMessage != "" {
+		s.saveConversationMessage(model.RoleAssistant, result.ReplyMessage)
+	}
+
+	return result, resultErr
+}
+
+func (s *SchedulerService) saveConversationMessage(role model.ConversationRole, content string) {
+	now := time.Now()
+	msg := &model.ConversationMessage{
+		Role:      role,
+		Content:   content,
+		Date:      time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()),
+		CreatedAt: now,
+	}
+	if err := s.repo.AddConversationMessage(msg); err != nil {
+		s.logger.Error("failed to save conversation message", slog.String("error", err.Error()))
 	}
 }
 
@@ -343,6 +376,29 @@ func (s *SchedulerService) FindMatchingTask(taskName string) (*model.Schedule, e
 	}
 
 	return nil, sql.ErrNoRows
+}
+
+// SendMorningPrompt sends morning prompt message to ask about today's schedule.
+func (s *SchedulerService) SendMorningPrompt(ctx context.Context) error {
+	// Clear old conversation history at the start of a new day
+	if err := s.repo.ClearOldConversationHistory(); err != nil {
+		s.logger.Warn("failed to clear old conversation history", slog.String("error", err.Error()))
+	}
+
+	morningMessage, err := s.gemini.GenerateMorningPrompt(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to generate morning prompt: %w", err)
+	}
+
+	if err := s.line.PushMessage(s.cfg.AllowedLineUserID, morningMessage); err != nil {
+		return fmt.Errorf("failed to send morning prompt: %w", err)
+	}
+
+	// Save to conversation history
+	s.saveConversationMessage(model.RoleAssistant, morningMessage)
+
+	s.logger.Info("sent morning prompt message")
+	return nil
 }
 
 // SendDailyReview sends daily review message to the user.
